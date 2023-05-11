@@ -1,0 +1,278 @@
+#!/bin/bash
+##################################################################################
+#   A quick way to create restorable backups for an IOMAD moodle installation    #
+#   There are probably 1000 better ways to do this, and my code skills are by    #
+#   no means good, but it works for me and creates almost automated              #
+#   Backups and restoral for my particular virtual host Apache installation      #
+#   with several IOMAD installations running multiple versions and branches      #
+#                                                                                #
+#   Glady accepting of all code contributions.. It's been 10+ years since I      #
+#   Wrote anything of use to anyone else or publicly available.                  #
+#   Next thing to do: Add options for scheduled cron backups                     #
+#                                                                                #
+##################################################################################
+declare -A CFG          # init settings.cfg options array
+declare -A PARAMS       # init PARAMS array for restoral
+declare -A IOMAD        # init IOMAD config.php array for restoral
+B=$(tput bold)
+U=$(tput smul)
+N=$(tput sgr0)
+awk=$(which awk)
+sed=$(which sed)
+grep=$(which grep)
+mysql=$(which mysql)
+php=$(which php)
+script_path=$(pwd)/
+archive_root="$(pwd)/${CFG[archive_root]}"
+WWW_USER=$(source /etc/apache2/envvars && echo "$APACHE_RUN_USER")
+clear
+#############################################################################
+# Read in the settings.cfg file, use an array to store
+while read line; do
+    case "$line" in \#*) continue ;; esac
+    if echo "$line" | grep -F = &>/dev/null
+    then
+        VARNAME=$(echo "$line" | cut -d '=' -f 1)
+        CFG["$VARNAME"]=$(echo "$line" | cut -d '=' -f 2-)
+    fi
+done < settings.cfg
+#############################################################################
+function final_check() {
+if [ ${CFG[enabled]} == "no" ]; then
+    echo "script not enabled - no changes made."
+    echo "Check settings.cfg:  enabled="
+    exit
+fi
+}
+
+function countdown() {
+    start="$(( $(date '+%s') + $1 * 60))"
+    while [ $start -ge $(date +%s) ]; do
+        time="$(( $start - $(date +%s) ))"
+        printf '%s\r' "$(date -u -d "@$time" +%H:%M:%S)"
+        sleep 0.1
+    done
+}
+#############################################################################
+
+if [ "$(dpkg -l | awk '/pv/ {print }'|wc -l)" -ge 1 ]; then
+ echo ''
+else
+ echo '---------------------------------------------'
+ echo '----          pv not installed           ----'
+ echo '---- Please install pv before continuing ----'
+ echo '----  PV is used to show a progress bar  ----'
+ echo '---------------------------------------------'
+ exit
+fi
+
+if [[ "$EUID" = 0 ]]; then
+    echo "running as sudo or root"
+else
+    sudo -k # make sure to ask for password on next sudo
+    if sudo true; then
+        echo "Password correct - sudo rights allowed"
+    else
+        echo "Wrong password"
+        exit 1
+    fi
+fi
+#############################################################################
+
+printf %"$COLUMNS"s | tr " " "-"
+printf "${B}Choose the IOMAD host to back-up and/or upgrade:${N} (number only)\n\n"
+cd ${CFG[www_rootdir]}
+select host_dir in *; do test -n $host_dir && break; echo ">>> Invalid Selection"; done
+VHOST_ROOTPATH=${CFG[www_rootdir]}/$host_dir/
+VHOST_HTMLPATH=${CFG[www_rootdir]}/$host_dir/${CFG[host_htmlroot]}
+VHOST_DATAPATH=${CFG[www_rootdir]}/$host_dir/${CFG[host_dataroot]}
+IOMAD_PHP=$VHOST_HTMLPATH/${CFG[host_config]}
+#######################################
+if [ ! -d "$VHOST_HTMLPATH" ]; then
+    echo "--------------------------------------------------"
+    echo "Path does not exist."
+    echo "The ${CFG[host_htmlroot]} directory was not found in:"
+    echo "-> ${B}${CFG[www_rootdir]}/$host_dir${N}"
+    echo
+    echo "Check paths, or script CFG.conf"
+    echo "--------------------------------------------------"
+    exit
+fi
+
+if [ -f $IOMAD_PHP ]; then
+    IOMAD_dbname=$($grep dbname $IOMAD_PHP | cut -d\' -f 2);
+    IOMAD_dbuser=$($grep dbuser $IOMAD_PHP | cut -d\' -f 2);
+    IOMAD_dbpass=$($grep dbpass $IOMAD_PHP | cut -d\' -f 2);
+    IOMAD_dataroot=$($grep dataroot $IOMAD_PHP | cut -d\' -f 2);
+else
+    echo "IOMAD Configuration file not found"
+    echo "Check paths in CFG.cfg"
+    echo "Terminating script"
+    exit
+fi
+BACKUPDATE=$(date +%Y%m%d-%H%M%S)
+CURRENT_USER=$(logname)
+cd $VHOST_HTMLPATH
+GET_COMMIT=$(git log -1 --oneline)
+CURRENT_COMMIT=${GET_COMMIT:0:10}
+ARCHIVE_PATH="${CFG[archive_root]}/$host_dir/$BACKUPDATE-$CURRENT_COMMIT"
+####################################################################################################
+echo ""
+while true; do
+read -p "${B}Upgrade after backup? (yes/no):${N} [${CFG[auto_update]}] " AUTO_UPDATE
+    case $AUTO_UPDATE in
+        ""  ) break;;
+        yes ) break;;
+        no  ) break;;
+        *   ) echo invalid - yes/no;;
+    esac
+done
+CFG[auto_update]=${AUTO_UPDATE:-${CFG[auto_update]}}
+####################################################################################################
+while true; do
+read -p "${B}RSYNC to offsite location? (yes/no):${N} [${CFG[rsync_enabled]}] " RSYNC_ENABLED
+    case $RSYNC_ENABLED in 
+        ""  ) break;;
+        yes ) break;;
+        no  ) break;;
+        *   ) echo invalid - yes/no;;
+    esac
+done
+CFG[rsync_enabled]=${RSYNC_ENABLED:-${CFG[rsync_enabled]}}
+####################################################################################################
+echo ""
+echo "--------------------------------------------------"
+echo "---- Delay in minutes before script execution"
+echo "---- Press ENTER for default ${CFG[delay_timer]} minutes"
+echo "---- Enter 0 for immediate execution"
+echo "--------------------------------------------------"
+shopt -s extglob
+while true; do
+read -p "${B}Default delay timer is set, Enter new delay or <ENTER>:${N} [${CFG[delay_timer]}] " DELAY_TIMER
+    case ${DELAY_TIMER} in 
+        ""  ) break;;
+        +([[:digit:]])  ) break;;
+        *               ) echo invalid - Digits only;;
+    esac
+    done
+CFG[delay_timer]=${DELAY_TIMER:-${CFG[delay_timer]}}
+
+read -p "${B}Re-enable site after operation?:${N} [${CFG[enable_host]}] " ENABLE_HOST
+while true; do
+    case $ENABLE_HOST in 
+        ""  ) break;;
+        yes ) break;;
+        no  ) break;;
+        *   ) echo invalid - yes/no;;
+    esac
+done
+CFG[enable_host]=${ENABLE_HOST:-${CFG[enable_host]}}
+####################################################################################################
+clear
+printf %"$COLUMNS"s | tr " " "-"
+echo "- ${B}General Options${N}"
+printf %"$COLUMNS"s | tr " " "-"
+echo "-- Update with git?       :   ${CFG[auto_update]}"
+echo "-- Delay timer            :   ${CFG[delay_timer]} minutes"
+echo "-- Re-enable host?        :   ${CFG[enable_host]}"
+echo "-- Webserver User         :   $WWW_USER"
+echo "-- Host directory         :   $host_dir"
+echo "-- Script Path            :   $script_path"
+printf %"$COLUMNS"s | tr " " "-"
+echo "- ${B}Host options${N}"
+printf %"$COLUMNS"s | tr " " "-"
+echo "-- Webserver root path    :   ${CFG[www_rootdir]}"
+echo "-- Site Root              :   $VHOST_ROOTPATH"
+echo "-- HTML Root path         :   $VHOST_HTMLPATH"
+echo "-- Moodledata path        :   $VHOST_DATAPATH"
+echo "-- Database Name          :   $IOMAD_dbname"
+echo "-- Database Username      :   $IOMAD_dbuser"
+echo "-- Database Password      :   $IOMAD_dbpass"
+echo "-- Archive folder         :   ${CFG[archive_root]}"
+echo "-- Archive path           :   $ARCHIVE_PATH"
+echo "-- Current User           :   $CURRENT_USER"
+printf %"$COLUMNS"s | tr " " "-"
+echo "- ${B}RSYNC options${N}"
+printf %"$COLUMNS"s | tr " " "-"
+echo "-- Use RSYNC?             :   ${CFG[rsync_enabled]}"
+echo "-- RSYNC username         :   ${CFG[rsync_localuser]}"
+echo "-- RSYNC Remote User      :   ${CFG[rsync_remoteuser]}"
+echo "-- RSYNC Remote Host      :   ${CFG[rsync_remotehost]}"
+echo "-- RSYNC Remote Path      :   ${CFG[rsync_remotepath]}"
+echo "-- RSYNC Full Path        :   ${CFG[rsync_remotepath]}/$host_dir"
+echo ""
+printf %"$COLUMNS"s | tr " " "-"
+echo "-  ${B}CTRL+C to abort, Press ENTER to continue${N}"
+printf %"$COLUMNS"s | tr " " "-"
+final_check
+read -p [ENTER]
+clear
+####################################################################################################
+function start () {
+cd $script_path
+	if [ ${CFG[delay_timer]} -eq 0 ]; then
+	enable="enable"
+	else
+	enable="enablelater=${CFG[delay_timer]}"
+	fi
+	echo - Setting offline warning for all users
+	sudo -u $WWW_USER $php $VHOST_HTMLPATH/admin/cli/maintenance.php --$enable
+	countdown ${CFG[delay_timer]}
+
+    if [ -f "$VHOST_DATAPATH/climaintenance.html.off" ]; then
+        echo -  Setting custom offline page for all users
+        cp $VHOST_DATAPATH/climaintenance.html.off $VHOST_DATAPATH/climaintenance.html
+    fi	
+    printf %"$COLUMNS"s | tr " " "-"
+	sudo -u $CURRENT_USER mkdir -p $ARCHIVE_PATH
+    echo www_rootdir=${CFG[www_rootdir]} | sudo -u $WWW_USER tee ${CFG[www_rootdir]}/$host_dir/PARAMS > /dev/null
+    echo www_hostdir=${CFG[www_rootdir]}/$host_dir | sudo -u $WWW_USER tee -a ${CFG[www_rootdir]}/$host_dir/PARAMS > /dev/null
+	echo archive_root=${CFG[archive_root]} | sudo -u $WWW_USER tee -a ${CFG[www_rootdir]}/$host_dir/PARAMS > /dev/null
+	echo archive_path=${CFG[archive_root]}/$host_dir | sudo -u $WWW_USER tee -a ${CFG[www_rootdir]}/$host_dir/PARAMS > /dev/null
+	echo last_backup=$BACKUPDATE-$CURRENT_COMMIT | sudo -u $WWW_USER tee -a ${CFG[www_rootdir]}/$host_dir/PARAMS > /dev/null
+    echo database_dump=$IOMAD_dbname.sql | sudo -u $WWW_USER tee -a ${CFG[www_rootdir]}/$host_dir/PARAMS > /dev/null
+    echo
+	cd $VHOST_ROOTPATH
+	echo "- BEGINNING BACKUP OF PRODUCTION WEBSITE -"
+	echo "- Creating ${B}${CFG[host_htmlroot]}.tar.gz${N}"
+	tar cf - ./${CFG[host_htmlroot]} -P | pv -s $(du -sb ./${CFG[host_htmlroot]} | awk '{print $1}') | gzip > $script_path/$ARCHIVE_PATH/${CFG[host_htmlroot]}.tar.gz
+    echo
+	echo "- Creating ${B}${CFG[host_dataroot]}.tar.gz${N}"
+	tar cf - ./${CFG[host_dataroot]} -P | pv -s $(du -sb ./${CFG[host_dataroot]} | awk '{print $1}') | gzip > $script_path/$ARCHIVE_PATH/${CFG[host_dataroot]}.tar.gz
+    echo
+    echo "- DUMPING DATABASE INTO: ${B}$IOMAD_dbname.sql${N} -"
+	mysqldump -u$IOMAD_dbuser -p$IOMAD_dbpass -C -Q -e --create-options $IOMAD_dbname > "$script_path/$ARCHIVE_PATH/$IOMAD_dbname.sql"
+	if [ ${CFG[auto_update]} == "yes" ]; then
+		cd $VHOST_HTMLPATH
+		echo - begining git pull -
+		sudo -u $WWW_USER git pull
+	fi
+####################################################################################################
+    printf %"$COLUMNS"s | tr " " "-"
+    echo - Changing ownership of backup files
+	sudo chown -R $CURRENT_USER:$CURRENT_USER $script_path/$ARCHIVE_PATH
+	if [ ${CFG[rsync_enabled]} == "yes" ]; then
+	echo - Starting rsync and sending latest backup to remote server
+	sudo -u ${CFG[rsync_localuser]} rsync -azhR $ARCHIVE_PATH/./* ${CFG[rsync_remoteuser]}@${CFG[rsync_remotehost]}:${CFG[rsync_remotepath]}/$host_dir&
+	echo "- Sending archive to remove server using rsync -"
+	fi
+	if [ ${CFG[enable_host]} == "yes" ]; then
+        echo - Disable maintenance mode and restore access
+        sudo -u $WWW_USER $php $VHOST_HTMLPATH/admin/cli/maintenance.php --disable
+    else
+        echo "${B}- Maintenance mode not disabled -${N}"
+	fi
+    printf %"$COLUMNS"s | tr " " "-"
+    echo
+}
+####################################################################################################
+if [ ${CFG[enabled]} == "yes" ]; then
+    start ${CFG[delay_timer]}
+    echo ""
+    echo "Backup is complete, the archive is saved as ${B}$BACKUPDATE-$CURRENT_COMMIT${N}"
+    echo "YYYYMMDD-HHMMSS-[git commit]"
+    echo ""
+else 
+    echo "Exited without execution - check settings.cfg for: enabled=${CFG[enabled]}"
+fi
+exit

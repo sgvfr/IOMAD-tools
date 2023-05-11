@@ -1,0 +1,248 @@
+#!/bin/bash
+##################################################################################
+#   A quick way to create restorable backups for an IOMAD moodle installation    #
+#   There are probably 1000 better ways to do this, and my code skills are by    #
+#   no means good, but it works for me and creates almost automated              #
+#   Backups and restoral for my particular virtual host Apache installation      #
+#   with several IOMAD installations running multiple versions and branches      #
+#                                                                                #
+#   Glady accepting of all code contributions.. It's been 10+ years since IOMAD  #
+#   Wrote anything publicly available.                                           #
+#   Next thing to do: Add are cli options for scheduled cron jobs                #
+##################################################################################
+declare -A CFG          # init settings.cfg options array
+declare -A PARAMS       # init PARAMS array for restoral
+declare -A IOMAD        # init IOMAD config.php array for restoral
+shopt -s extglob
+##################################################################################
+# Read in the settings.cfg file
+while read line; do
+    case "$line" in \#*) continue ;; esac
+    if echo "$line" | grep -F = &>/dev/null
+    then
+        VARNAME=$(echo "$line" | cut -d '=' -f 1)
+        CFG["$VARNAME"]=$(echo "$line" | cut -d '=' -f 2-)
+    fi
+done < settings.cfg
+##################################################################################
+B=$(tput bold)
+U=$(tput smul)
+N=$(tput sgr0)
+awk=$(which awk)
+sed=$(which sed)
+grep=$(which grep)
+mysql=$(which mysql)
+archive_root="$(pwd)/${CFG[archive_root]}"
+WWW_USER=$(source /etc/apache2/envvars && echo "$APACHE_RUN_USER")
+script_path=$(pwd)
+php=$(which php)
+CFG[IOMAD_PHP]=${CFG[host_htmlroot]}/${CFG[host_config]}
+CFG[current_user]=$(logname)
+##################################################################################
+function final_check() {
+if [ ${CFG[enabled]} == "no" ]; then
+    echo "script not enabled - no changes made."
+    echo "Check settings.cfg:  enabled="
+    exit
+fi
+}
+##################################################################################
+clear
+if [ "$(dpkg -l | awk '/pv/ {print }'|wc -l)" -ge 1 ]; then
+ echo ''
+else
+ echo '---------------------------------------------'
+ echo '----          pv not installed           ----'
+ echo '---- Please install pv before continuing ----'
+ echo '----  PV is used to show a progress bar  ----'
+ echo '---------------------------------------------'
+ exit
+fi
+
+if [[ "$EUID" = 0 ]]; then
+    echo "running as sudo or root"
+else
+    sudo -k # make sure to ask for password on next sudo
+    if sudo true; then
+        echo "Password correct - sudo rights allowed"
+    else
+        echo "Wrong password"
+        exit 1
+    fi
+fi
+##################################################################################
+clear
+printf %"$COLUMNS"s | tr " " "-"
+echo "${B}-- List of configured hosts in ${CFG[www_rootdir]}${N}"
+echo "-- Choose the number of the site to restore:${N}"
+echo -e "Only IOMAD Moodle installations can be selected\n"
+cd ${CFG[www_rootdir]}
+select HOST_DIR in */; do test -n "$HOST_DIR" && break; echo ">>> Invalid Selection"; done
+HOST_DIR=${HOST_DIR%/}
+PARAM_FILE="$HOST_DIR/PARAMS"
+
+if [[ -f "$PARAM_FILE" ]]; then
+    while read line; do
+        case "$line" in \#*) continue ;; esac
+        if echo "$line" | grep -F = &>/dev/null
+        then
+            #echo $line
+            varname=$(echo "$line" | cut -d '=' -f 1)
+            PARAMS["$varname"]=$(echo "$line" | cut -d '=' -f 2-)
+        fi
+    done < $PARAM_FILE
+else
+    echo "No Params file found"
+    echo "-- ONLY SITES BACKED UP WITH THE BACKUP-UPDATE.SH SCRIPT ARE SUPPORTED (FOR NOW)"
+    echo "-- BY THIS SCRIPT - I'M WORKING ON IT, BUT FOR NOW A MANUAL RESTORE MUST BE DONE"
+    exit
+fi
+function countdown() {
+    start="$(( $(date '+%s') + $1 * 60))"
+    while [ $start -ge $(date +%s) ]; do
+        time="$(( $start - $(date +%s) ))"
+        printf '%s\r' "$(date -u -d "@$time" +%H:%M:%S)"
+        sleep 0.1
+    done
+}
+##################################################################################
+if [ -z "$(ls -A $script_path/${PARAMS[archive_path]})" ]; then
+   echo "${PARAMS[archive_path]} is empty - nothing to do."
+   exit
+fi
+echo && printf %"$COLUMNS"s | tr " " "-"
+
+cd $script_path/${PARAMS[archive_path]}
+printf "${B}Choose the archive to restore:${N}  (number only)\n"
+printf "From ${U}$script_path/${PARAMS[archive_path]}${N}\n"
+printf "Last archive is in: ${B}${PARAMS[last_backup]}${N}\n\n"
+select choose_archive in */; do test -n "$choose_archive" && break; echo ">>> Invalid Selection"; done
+CFG[archive]=${choose_archive%/}
+echo
+echo "-- ${B}${CFG[archive]}${N} selected"
+IOMAD_PHP=${PARAMS[www_hostdir]}/${CFG[host_htmlroot]}/${CFG[host_config]}
+echo "-- Reading in $IOMAD_PHP"
+IOMAD[dbname]=$($grep dbname $IOMAD_PHP | cut -d\' -f 2);
+IOMAD[dbuser]=$($grep dbuser $IOMAD_PHP | cut -d\' -f 2);
+IOMAD[dbpass]=$($grep dbpass $IOMAD_PHP | cut -d\' -f 2);
+IOMAD[wwwroot]=$($grep wwwroot $IOMAD_PHP | cut -d\' -f 2);
+##################################################################################
+printf %"$COLUMNS"s | tr " " "-"
+printf "\n\n"
+while true; do
+read -p "${B}Default delay timer is set, Enter new delay or <ENTER> :${N} [${CFG[delay_timer]}] " DELAY_TIMER
+    case ${DELAY_TIMER} in 
+        ""  ) break;;
+        +([[:digit:]])  ) break;;
+        *               ) echo invalid - Digits only;;
+    esac
+    done
+CFG[delay_timer]=${DELAY_TIMER:-${CFG[delay_timer]}}
+
+while true; do
+read -p "${B}Preserve existing ${CFG[host_config]}?${N} [${CFG[preserve_config]}] : " NEW_PRESERVE_CONFIG
+    case $NEW_PRESERVE_CONFIG in 
+        ""  ) break;;
+        yes ) break;;
+        no  ) break;;
+        *   ) echo invalid - yes/no;;
+    esac
+done
+CFG[preserve_config]=${NEW_PRESERVE_CONFIG:-${CFG[preserve_config]}}
+
+while true; do
+read -p "${B}Re-enable site after operation?${N} [${CFG[enable_host]}] : " ENABLE_HOST
+    case $ENABLE_HOST in 
+        ""  ) break;;
+        yes ) break;;
+        no  ) break;;
+        *   ) echo invalid - yes/no;;
+    esac
+done
+CFG[enable_host]=${ENABLE_HOST:-${CFG[enable_host]}}
+##################################################################################
+clear
+printf %"$COLUMNS"s | tr " " "-"
+echo "- SAVED SETTINGS"
+printf %"$COLUMNS"s | tr " " "-"
+echo "Archive Source        :   ${PARAMS[archive_path]}/${CFG[archive]}"
+echo "Restore Target        :   ${PARAMS[www_rootdir]}/$HOST_DIR"
+echo "Disable Maintenance   :   ${CFG[enable_host]}"
+echo "Delay until restoral  :   ${CFG[delay_timer]}"
+echo "Preserve config       :   ${CFG[preserve_config]}"
+echo "Webserver User        :   $WWW_USER"
+echo "Website URL           :   ${IOMAD[wwwroot]}"
+echo
+printf %"$COLUMNS"s | tr " " "-"
+echo "- DATABASE TO BE TRUNCATED AND RESTORED FROM ARCHIVE"
+printf %"$COLUMNS"s | tr " " "-"
+echo "Database Name         :   ${IOMAD[dbname]}"
+echo "Database Username     :   ${IOMAD[dbuser]}"
+echo "Database Password     :   ${IOMAD[dbpass]}"
+echo "Database Archive      :   ${PARAMS[database_dump]}"
+echo
+printf %"$COLUMNS"s | tr " " "-"
+read -p "Restore will start ${B}${CFG[delay_timer]} minutes${N} after pressing ENTER.  CTRL+C to cancel"
+##################################################################################
+
+function start() {
+    clear
+    printf %"$COLUMNS"s | tr " " "-"
+    if [ ${CFG[delay_timer]} -eq 0 ]; then
+        action="enable"
+        else
+        action="enablelater=${CFG[delay_timer]}"
+    fi
+    sudo -u $WWW_USER $php ${CFG[www_rootdir]}/$HOST_DIR/${CFG[host_htmlroot]}/admin/cli/maintenance.php --$action
+    echo "The server should be in maintenance mode or timer mode now with countdown below"
+
+    countdown ${CFG[delay_timer]}
+    printf %"$COLUMNS"s | tr " " "-"
+    echo ""
+    echo "Extracting archives into ${PARAMS[archive_path]}/${CFG[archive]}"
+    cd ${CFG[archive]}
+    pv ${CFG[host_htmlroot]}.tar.gz | sudo tar xzf - -C ./
+    pv ${CFG[host_dataroot]}.tar.gz | sudo tar xzf - -C ./
+    sudo chown -R $WWW_USER ${CFG[host_htmlroot]}
+    sudo chown -R $WWW_USER ${CFG[host_dataroot]}
+    if [ ${CFG[preserve_config]} == "yes" ]; then
+        echo "- ${CFG[host_config]} preserved by overwritting backup archive with current"
+        sudo -u $WWW_USER cp -r $IOMAD_PHP ${CFG[host_htmlroot]}/
+        echo ""
+    fi
+    cd ${PARAMS[www_hostdir]}
+    echo -e "- Removing existing from: $HOST_DIR\n"
+    printf "${B}${CFG[host_htmlroot]}${N}\n"
+    sudo rm -rv ${PARAMS[www_rootdir]}/$HOST_DIR/${CFG[host_htmlroot]} | pv -l -s $( du -a ${PARAMS[www_rootdir]}/$HOST_DIR/${CFG[host_htmlroot]} | wc -l ) > /dev/null
+    printf "${B}${CFG[host_dataroot]}${N}\n"
+    sudo rm -rv ${PARAMS[www_rootdir]}/$HOST_DIR/${CFG[host_dataroot]} | pv -l -s $( du -a ${PARAMS[www_rootdir]}/$HOST_DIR/${CFG[host_dataroot]} | wc -l ) > /dev/null
+    echo ""
+    echo "- Truncating the database ${B}${IOMAD[dbname]}${N}" 
+    echo "  This will take some time on a large database"
+    cd $script_path/${PARAMS[archive_path]}/${CFG[archive]}
+    echo ""
+    sudo $mysql -Nse 'show tables' ${IOMAD[dbname]} | while read table; do sudo $mysql -e "drop table $table" ${IOMAD[dbname]}; done
+    sudo $mysql -u ${IOMAD[dbuser]} -p${IOMAD[dbpass]} ${IOMAD[dbname]} < ${PARAMS[database_dump]}
+    echo "- Moving archived folders into ${PARAMS[www_rootdir]}/$HOST_DIR/"
+    cd $script_path/${PARAMS[archive_path]}/${CFG[archive]}/
+    sudo mv ${CFG[host_htmlroot]} ${PARAMS[www_rootdir]}/$HOST_DIR/
+    sudo mv ${CFG[host_dataroot]} ${PARAMS[www_rootdir]}/$HOST_DIR/
+    printf %"$COLUMNS"s | tr " " "-"
+    if [ ${CFG[enable_host]} == "yes" ]; then
+        sudo -u $WWW_USER $php ${PARAMS[www_rootdir]}/$HOST_DIR/${CFG[host_htmlroot]}/admin/cli/maintenance.php --disable
+    fi
+}
+##################################################################################
+
+if [ ${CFG[enabled]} == "yes" ]; then
+    start ${CFG[delay_timer]}
+    else 
+    echo "Exited without execution - check settings.cfg for: enabled=${CFG[enabled]}"
+fi
+printf %"$COLUMNS"s | tr " " "-"
+echo ""
+echo "Complete - Finish the IOMAD Configuration in the browser"
+echo ""
+echo "${B}${IOMAD[wwwroot]}${N}"
+echo ""
+exit
