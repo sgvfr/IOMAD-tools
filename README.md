@@ -1,14 +1,14 @@
 # IOMAD tools
  ##################################################################################
-#   A quick way to create restorable backups for an IOMAD moodle installation    #
-#   There are probably 1000 better ways to do this, and my code skills are by    #
-#   no means good, but it works for me and creates almost automated              #
-#   Backups and restoral for my particular virtual host Apache installation      #
-#   with several IOMAD installations running multiple versions and branches      #
-#                                                                                #
-#   Glady accepting of all code contributions.. It's been 10+ years since I      #
-#   Wrote anything publicly available.                                           #
-#   Next thing to do: Add cli options for scheduled cron jobs                    #
+A quick way to create restorable backups for an IOMAD moodle installation
+There are probably 1000 better ways to do this, and my code skills are by
+no means good, but it works for me and creates almost automated          
+Backups and restoral for my particular virtual host Apache installation  
+with several IOMAD installations running multiple versions and branches  
+                                                                         
+Glady accepting of all code contributions.. It's been 10+ years since I  
+Wrote anything publicly available.                                       
+Next thing to do: Add cli options for scheduled cron jobs                
 ##################################################################################
 
 
