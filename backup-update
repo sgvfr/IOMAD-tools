@@ -24,18 +24,34 @@ mysql=$(which mysql)
 php=$(which php)
 script_path=$(pwd)/
 archive_root="$(pwd)/${CFG[archive_root]}"
-WWW_USER=$(source /etc/apache2/envvars && echo "$APACHE_RUN_USER")
+www_user=$(source /etc/apache2/envvars && echo "$APACHE_RUN_USER")
 clear
 #############################################################################
-# Read in the settings.cfg file, use an array to store
-while read line; do
-    case "$line" in \#*) continue ;; esac
-    if echo "$line" | grep -F = &>/dev/null
-    then
-        VARNAME=$(echo "$line" | cut -d '=' -f 1)
-        CFG["$VARNAME"]=$(echo "$line" | cut -d '=' -f 2-)
+if [[ "$EUID" = 0 ]]; then
+    echo "running as sudo or root"
+else
+    sudo -k # make sure to ask for password on next sudo
+    if sudo true; then
+        echo "Password correct - sudo rights allowed"
+    else
+        echo "Wrong password"
+        exit 1
     fi
-done < settings.cfg
+fi
+#############################################################################
+# Read in the settings.cfg file, use an array to store
+if [ -f "settings.cfg" ]; then
+    while read line; do
+        case "$line" in \#*) continue ;; esac
+        if echo "$line" | grep -F = &>/dev/null
+        then
+            VARNAME=$(echo "$line" | cut -d '=' -f 1)
+            CFG["$VARNAME"]=$(echo "$line" | cut -d '=' -f 2-)
+        fi
+    done < settings.cfg
+else 
+    echo "No settings.cfg found - modify and rename settings.cfg.default to settings.cfg"
+fi
 #############################################################################
 function final_check() {
 if [ ${CFG[enabled]} == "no" ]; then
@@ -44,7 +60,6 @@ if [ ${CFG[enabled]} == "no" ]; then
     exit
 fi
 }
-
 function countdown() {
     start="$(( $(date '+%s') + $1 * 60))"
     while [ $start -ge $(date +%s) ]; do
@@ -64,18 +79,6 @@ else
  echo '----  PV is used to show a progress bar  ----'
  echo '---------------------------------------------'
  exit
-fi
-
-if [[ "$EUID" = 0 ]]; then
-    echo "running as sudo or root"
-else
-    sudo -k # make sure to ask for password on next sudo
-    if sudo true; then
-        echo "Password correct - sudo rights allowed"
-    else
-        echo "Wrong password"
-        exit 1
-    fi
 fi
 #############################################################################
 
@@ -175,16 +178,16 @@ printf %"$COLUMNS"s | tr " " "-"
 echo "-- Update with git?       :   ${CFG[auto_update]}"
 echo "-- Delay timer            :   ${CFG[delay_timer]} minutes"
 echo "-- Re-enable host?        :   ${CFG[enable_host]}"
-echo "-- Webserver User         :   $WWW_USER"
+echo "-- Webserver User         :   $www_user"
 echo "-- Host directory         :   $host_dir"
 echo "-- Script Path            :   $script_path"
 printf %"$COLUMNS"s | tr " " "-"
 echo "- ${B}Host options${N}"
 printf %"$COLUMNS"s | tr " " "-"
 echo "-- Webserver root path    :   ${CFG[www_rootdir]}"
-echo "-- Site Root              :   $VHOST_ROOTPATH"
-echo "-- HTML Root path         :   $VHOST_HTMLPATH"
-echo "-- Moodledata path        :   $VHOST_DATAPATH"
+echo "-- Site path              :   $VHOST_ROOTPATH"
+echo "-- Site HTML path         :   $VHOST_HTMLPATH"
+echo "-- Site data path         :   $VHOST_DATAPATH"
 echo "-- Database Name          :   $IOMAD_dbname"
 echo "-- Database Username      :   $IOMAD_dbuser"
 echo "-- Database Password      :   $IOMAD_dbpass"
@@ -216,7 +219,7 @@ cd $script_path
 	enable="enablelater=${CFG[delay_timer]}"
 	fi
 	echo - Setting offline warning for all users
-	sudo -u $WWW_USER $php $VHOST_HTMLPATH/admin/cli/maintenance.php --$enable
+	sudo -u $www_user $php $VHOST_HTMLPATH/admin/cli/maintenance.php --$enable
 	countdown ${CFG[delay_timer]}
 
     if [ -f "$VHOST_DATAPATH/climaintenance.html.off" ]; then
@@ -225,12 +228,12 @@ cd $script_path
     fi	
     printf %"$COLUMNS"s | tr " " "-"
 	sudo -u $CURRENT_USER mkdir -p $ARCHIVE_PATH
-    echo www_rootdir=${CFG[www_rootdir]} | sudo -u $WWW_USER tee ${CFG[www_rootdir]}/$host_dir/PARAMS > /dev/null
-    echo www_hostdir=${CFG[www_rootdir]}/$host_dir | sudo -u $WWW_USER tee -a ${CFG[www_rootdir]}/$host_dir/PARAMS > /dev/null
-	echo archive_root=${CFG[archive_root]} | sudo -u $WWW_USER tee -a ${CFG[www_rootdir]}/$host_dir/PARAMS > /dev/null
-	echo archive_path=${CFG[archive_root]}/$host_dir | sudo -u $WWW_USER tee -a ${CFG[www_rootdir]}/$host_dir/PARAMS > /dev/null
-	echo last_backup=$BACKUPDATE-$CURRENT_COMMIT | sudo -u $WWW_USER tee -a ${CFG[www_rootdir]}/$host_dir/PARAMS > /dev/null
-    echo database_dump=$IOMAD_dbname.sql | sudo -u $WWW_USER tee -a ${CFG[www_rootdir]}/$host_dir/PARAMS > /dev/null
+    echo www_rootdir=${CFG[www_rootdir]} | sudo -u $www_user tee ${CFG[www_rootdir]}/$host_dir/PARAMS > /dev/null
+    echo www_hostdir=${CFG[www_rootdir]}/$host_dir | sudo -u $www_user tee -a ${CFG[www_rootdir]}/$host_dir/PARAMS > /dev/null
+	echo archive_root=${CFG[archive_root]} | sudo -u $www_user tee -a ${CFG[www_rootdir]}/$host_dir/PARAMS > /dev/null
+	echo archive_path=${CFG[archive_root]}/$host_dir | sudo -u $www_user tee -a ${CFG[www_rootdir]}/$host_dir/PARAMS > /dev/null
+	echo last_backup=$BACKUPDATE-$CURRENT_COMMIT | sudo -u $www_user tee -a ${CFG[www_rootdir]}/$host_dir/PARAMS > /dev/null
+    echo database_dump=$IOMAD_dbname.sql | sudo -u $www_user tee -a ${CFG[www_rootdir]}/$host_dir/PARAMS > /dev/null
     echo
 	cd $VHOST_ROOTPATH
 	echo "- BEGINNING BACKUP OF PRODUCTION WEBSITE -"
@@ -245,7 +248,7 @@ cd $script_path
 	if [ ${CFG[auto_update]} == "yes" ]; then
 		cd $VHOST_HTMLPATH
 		echo - begining git pull -
-		sudo -u $WWW_USER git pull
+		sudo -u $www_user git pull
 	fi
 ####################################################################################################
     printf %"$COLUMNS"s | tr " " "-"
@@ -258,7 +261,7 @@ cd $script_path
 	fi
 	if [ ${CFG[enable_host]} == "yes" ]; then
         echo - Disable maintenance mode and restore access
-        sudo -u $WWW_USER $php $VHOST_HTMLPATH/admin/cli/maintenance.php --disable
+        sudo -u $www_user $php $VHOST_HTMLPATH/admin/cli/maintenance.php --disable
     else
         echo "${B}- Maintenance mode not disabled -${N}"
 	fi
@@ -268,10 +271,6 @@ cd $script_path
 ####################################################################################################
 if [ ${CFG[enabled]} == "yes" ]; then
     start ${CFG[delay_timer]}
-    echo ""
-    echo "Backup is complete, the archive is saved as ${B}$BACKUPDATE-$CURRENT_COMMIT${N}"
-    echo "YYYYMMDD-HHMMSS-[git commit]"
-    echo ""
 else 
     echo "Exited without execution - check settings.cfg for: enabled=${CFG[enabled]}"
 fi
