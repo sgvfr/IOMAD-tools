@@ -1,69 +1,130 @@
 #!/bin/bash
-
-webroot=/var/www/vhosts
-iomad_config="iomad/config.php"
-#############################################################################
-mysql=$(which mysql)
+##################################################################################
+#   A quick way to create restorable backups for an IOMAD moodle installation    #
+#   There are probably 1000 better ways to do this, and my code skills are by    #
+#   no means good, but it works for me and creates almost automated              #
+#   Backups and restoral for my particular virtual host Apache installation      #
+#   with several IOMAD installations running multiple versions and branches      #
+#                                                                                #
+#   Glady accepting of all code contributions.. It's been 10+ years since I      #
+#   Wrote anything of use to anyone else or publicly available.                  #
+#   Next thing to do: Add options for scheduled cron backups                     #
+#                                                                                #
+##################################################################################
+declare -A CFG          # init settings.cfg options array
+declare -A PARAMS       # init PARAMS array for restoral
+declare -A IOMAD        # init IOMAD config.php array for restoral
+B=$(tput bold)
+U=$(tput smul)
+N=$(tput sgr0)
 awk=$(which awk)
+sed=$(which sed)
 grep=$(which grep)
-apache_user=$(source /etc/apache2/envvars && echo "$APACHE_RUN_USER")
-
+mysql=$(which mysql)
+php=$(which php)
+script_path=$(pwd)/
+archive_root="$(pwd)/${CFG[archive_root]}"
+www_user=$(source /etc/apache2/envvars && echo "$APACHE_RUN_USER")
+clear
+#############################################################################
 if [[ "$EUID" = 0 ]]; then
-    echo "(1) already root"
+    echo "running as sudo or root"
 else
     sudo -k # make sure to ask for password on next sudo
     if sudo true; then
-        echo "correct password"
+        echo "Password correct - sudo rights allowed"
     else
-        echo "sudo password failed"
+        echo "Wrong password"
         exit 1
     fi
 fi
-##
+#############################################################################
+# Read in the settings.cfg file, use an array to store
+if [ -f "settings.cfg" ]; then
+    while read line; do
+        case "$line" in \#*) continue ;; esac
+        if echo "$line" | grep -F = &>/dev/null
+        then
+            VARNAME=$(echo "$line" | cut -d '=' -f 1)
+            CFG["$VARNAME"]=$(echo "$line" | cut -d '=' -f 2-)
+        fi
+    done < settings.cfg
+else 
+    echo "No settings.cfg found - modify and rename settings.cfg.default to settings.cfg"
+fi
+#############################################################################
 clear
 printf "Choose an installation to clear:\n"
-select hostpath in $webroot/*/; do test -n "$hostpath" && break; echo ">>> Invalid Selection"; done
-hostpath=${hostpath%/}
-config_php=$hostpath/$iomad_config
-read -p "branch to install (IOMAD_xxx_STABLE) Numbers ONLY:  " branch
-branch="IOMAD_"$branch"_STABLE"
+cd ${CFG[www_rootdir]}
+select host_dir in *; do test -n $host_dir && break; echo ">>> Invalid Selection"; done
+VHOST_ROOTPATH=${CFG[www_rootdir]}/$host_dir/
+VHOST_HTMLPATH=${CFG[www_rootdir]}/$host_dir/${CFG[host_htmlroot]}
+VHOST_DATAPATH=${CFG[www_rootdir]}/$host_dir/${CFG[host_dataroot]}
+IOMAD_PHP=$VHOST_HTMLPATH/${CFG[host_config]}
+#######################################
+if [ ! -d "$VHOST_HTMLPATH" ]; then
+    echo "--------------------------------------------------"
+    echo "Path does not exist."
+    echo "The ${CFG[host_htmlroot]} directory was not found in:"
+    echo "-> ${B}${CFG[www_rootdir]}/$host_dir${N}"
+    echo
+    echo "Check paths, or script CFG.conf"
+    echo "--------------------------------------------------"
+    exit
+fi
+read -p "branch to install (IOMAD_xxx_STABLE) Numbers ONLY:  " BRANCH_NUMBER
+IOMAD_BRANCH="IOMAD_"$BRANCH_NUMBER"_STABLE"
 ############################################################
-dbname=$($grep dbname $config_php | cut -d\' -f 2);
-dbuser=$($grep dbuser $config_php | cut -d\' -f 2);
-dbpass=$($grep dbpass $config_php | cut -d\' -f 2);
-wwwroot=$($grep wwwroot $config_php | cut -d\' -f 2);
+if [ -f $IOMAD_PHP ]; then
+echo "-- Reading in $IOMAD_PHP"
+    IOMAD[dbname]=$($grep -m1 dbname $IOMAD_PHP | cut -d\' -f 2);
+    IOMAD[dbuser]=$($grep -m1 dbuser $IOMAD_PHP | cut -d\' -f 2);
+    IOMAD[dbpass]=$($grep -m1 dbpass $IOMAD_PHP | cut -d\' -f 2);
+    IOMAD[wwwroot]=$($grep -m1 wwwroot $IOMAD_PHP | cut -d\' -f 2);
+else
+    echo "IOMAD Configuration file not found"
+    echo "Check paths in CFG.cfg"
+    echo "Terminating script"
+    exit
+fi
 ############################################################
-echo --
-echo --  The existing host at $hostpath will be DELETED
-echo --  All data will be removed
-echo --  The database will be dropped and recreated
-echo --
-echo --  $iomad_config will be restored using the following data
-echo --  Database name : $dbname
-echo --  Database user : $dbuser
-echo --  Database pass : $dbpass
-echo --  Install Branch: $branch
-echo --
-echo --  use CTRL+C to abort and exit the script
+clear
+printf %"$COLUMNS"s | tr " " "-"
+echo "- ${B}Clean IOMAD Installation${N}"
+printf %"$COLUMNS"s | tr " " "-"
+echo "-  The existing host at ${B}$VHOST_ROOTPATH${N} will be DELETED"
+echo "-  All data will be removed"
+echo "-  VHOST_ROOTPATH: $VHOST_ROOTPATH"
+echo "-  IOMAD_PHP: $IOMAD_PHP"
+echo "-  CONFIG: ${CFG[host_config]}"
+echo "-  HTML: ${CFG[host_htmlroot]}"
+echo "-  DATA: ${CFG[host_dataroot]}"
+echo ""
+echo "-  ${B}The database will be dropped and recreated${N}"
+echo "-  Database name : ${IOMAD[dbname]}"
+echo "-  Database user : ${IOMAD[dbuser]}"
+echo "-  Database pass : ${IOMAD[dbpass]}"
+echo "-  Install Branch: $IOMAD_BRANCH"
+echo "-"
+echo "-  use CTRL+C to abort and exit the script"
+printf %"$COLUMNS"s | tr " " "-"
 read -p "[enter]"
 ############################################################
 function clean() {
-sudo -u $apache_user cp $config_php $hostpath
-ls -al $hostpath
-cd $hostpath
-pwd
-sudo -u www-data rm -rf $hostpath/iomad
-sudo -u www-data rm -rf $hostpath/moodledata
-sudo -u www-data mkdir $hostpath/moodledata
-mysql -u$dbuser -p$dbpass -e "DROP DATABASE IF EXISTS $dbname"
-mysql -u$dbuser -p$dbpass -e "CREATE DATABASE IF NOT EXISTS $dbname"
-sudo -u $apache_user git clone https://github.com/iomad/iomad.git && cd iomad
-sudo -u $apache_user git checkout -b $branch origin/$branch
-sudo -u $apache_user cp $hostpath/config.php $config_php
-ls -al $hostpath
+sudo -u $www_user cp $IOMAD_PHP $VHOST_ROOTPATH
+cd $VHOST_ROOTPATH
+sudo -u $www_user rm -rf ${CFG[host_htmlroot]}
+sudo -u $www_user rm -rf ${CFG[host_dataroot]}
+sudo -u $www_user mkdir ${CFG[host_dataroot]}
+sudo mysql -u${IOMAD[dbuser]} -p${IOMAD[dbpass]} -e "DROP DATABASE IF EXISTS ${IOMAD[dbname]}"
+sudo mysql -u${IOMAD[dbuser]} -p${IOMAD[dbpass]} -e "CREATE DATABASE IF NOT EXISTS ${IOMAD[dbname]}"
+sudo -u $www_user git clone https://github.com/iomad/iomad.git && cd iomad
+sudo -u $www_user git checkout -b $IOMAD_BRANCH origin/$IOMAD_BRANCH
+sudo -u $www_user cp $VHOST_ROOTPATH/${CFG[host_config]} $IOMAD_PHP
+ls -al $VHOST_ROOTPATH
 clear
 echo --
-echo --  COMPLETE - visit $wwwroot to finalize the installation
+echo --  COMPLETE - visit ${IOMAD[wwwroot]} to finalize the installation
 echo --
 }
 clean
