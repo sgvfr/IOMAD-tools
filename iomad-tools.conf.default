@@ -1,16 +1,8 @@
-##################################################################################
-#   A quick way to create restorable backups for an IOMAD moodle installation    #
-#   There are probably 1000 better ways to do this, and my code skills are by    #
-#   no means good, but it works for me and creates almost automated              #
-#   Backups and restoral for my particular virtual host Apache installation      #
-#   with several IOMAD installations running multiple versions and branches      #
-#                                                                                #
-#   Glady accepting of all code contributions.. It's been 10+ years since IOMAD  #
-#   Wrote anything publicly available.                                           #
-#   Next thing to do: Add are cli options for scheduled cron jobs                #
-##################################################################################
-#
-#
+#######################################################################
+#                                                                     #
+#  For backup-update script                                           #
+#                                                                     #
+#######################################################################
 # base location where your virtual hosts reside
 # example 1:  you have only one host on your server and the Directory structure is:
 #
@@ -21,7 +13,8 @@
 #            ├── logs
 #		     └── moodledata
 #
-#   www_rootdir=/var/www/html
+#   www_rootdir=/var/www
+#   choose 'html'
 #
 #
 # EXAMPLE 2:  Multiple virtualhosts on your server, directory structure:
@@ -41,39 +34,35 @@
 #   www_rootdir=/var/www/vhosts
 
 www_rootdir=/var/www/vhosts
-# The next three are the default names - only change if you know you have too.
 host_htmlroot=iomad
 host_dataroot=moodledata
 host_config=config.php
-
-# Used by the restore script - this will keep the current config.php file
-# if net to 'no' the config.php in the archive will be used instead.
-preserve_config=yes
-
-# The archive_root directory will be created in the same location
+# This directory will be created in the same location
 # the scripts are run from if it doesn't exist
 # eg: /home/[you]/
 # will create /home/[you]/IOMAD_BACKUPS as the archive root folder
 archive_root=IOMAD_BACKUPS
 
-# Let the script pull the current IOMAD for the installed branch
+# let the script upgrade the current IOMAD to the latest commit
+# The branch will not change.
 auto_update=no 
 
 # Additional offsite SCP host for backups.
-# Be sure to copy ssh-id to the remote host to bypass password prompts for the usernames
+# Be sure to copy ssh-id to the remote host to bypass password prompts
 # rsync_enabled=              [yes/no]
 # rsync_localuser=            local username to run as (sudo -u $rsync_localuser)
-# rsync_remoteuser=           remote username
+# rsync_remoteuser=           remote username on offsite host
 # rsync_remotehost=           domain name or IP address of remote host
 # rsync_remotepath=           Don't use a leading / unless you have access, or a jailed/chrooted remote account
 #                             The directory would be relative to the remote users home.
 #                             example:  /home/$rsync_remoteuser/$rsync_remotepath
-#                             Make sure this folder exists.  
+#                             Make sure this folder exists.
+#
 rsync_enabled=no
-rsync_localuser=localusername
-rsync_remoteuser=remoteusername
-rsync_remotehost=host.domain.com
-rsync_remotepath=BACKUP/REMOTE/
+rsync_localuser=firetrain
+rsync_remoteuser=backup_user
+rsync_remotehost=smoothbore.sgvfr.com
+rsync_remotepath=BACKUP/REMOTE/sandbox
 #############################################################################
 
 # The site will be put into maintenance mode automatially when the script runs
@@ -82,14 +71,19 @@ rsync_remotepath=BACKUP/REMOTE/
 enable_host=yes
 
 # This gives a warning and a countdown to users before putting the host into maintenance mode
-# for a custom HTML offline page, save it to moodledata ($host_dataroot)/climaintenance.html.off  
+# for a custom HTML offline page, save it to $host_dataroot/climaintenance.html.off  
 # The script will copy that into the custom offline page if it exists
-# and remove it will be removed when maintenance mode is disabled
-delay_timer=30
+# and remove it when maintenance mode is disabled
+delay_timer=0
 
-# Enable the script to run.  If set to no, it will exit before performing any actions.
-# All options selected or pulled from this cfg file will be shown for any troubleshooting.
-# [yes/no]
-enabled=no
+enabled=yes
+# enabled=no
 
+#######################################################################
+#                                                                     #
+#  For restore script                                                 #
+#                                                                     #
+#######################################################################
+
+preserve_config=yes
 

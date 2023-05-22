@@ -1,0 +1,164 @@
+#!/bin/bash
+#init
+WEBROOT=/var/www/vhosts
+#############################################################################
+clear
+if [ "$(dpkg -l | awk '/pv/ {print }'|wc -l)" -ge 1 ]; then
+ echo ''
+else
+ echo '---------------------------------------------'
+ echo '----          pv not installed           ----'
+ echo '---- Please install pv before continuing ----'
+ echo '----  PV is used to show a progress bar  ----'
+ echo '---------------------------------------------'
+ exit
+fi
+
+if [[ "$EUID" = 0 ]]; then
+    echo "(1) already root"
+else
+    sudo -k # make sure to ask for password on next sudo
+    if sudo true; then
+        echo "correct password"
+    else
+        echo "sudo password failed"
+        exit 1
+    fi
+fi
+##
+clear
+printf "Choose which IOMAD host:\n"
+select d in $WEBROOT/*/; do test -n "$d" && break; echo ">>> Invalid Selection"; done
+
+############################################################
+HOSTPATH=$d
+CONFIG_PHP=$d/iomad/config.php
+DEFAULT_DBNAME=db_sandbox_firetrain_ca
+DEFAULT_DBUSER=usr_sandbox_firetrain_ca
+DEFAULT_DBPASS=utf8mb4_unicode_ci
+DEFAULT_DELAY=15
+DEFAULT_WWW_OWNER=www-data
+DEFAULT_DO_UPGRADE=no
+DEFAULT_DO_SCP=no
+DEFAULT_MAINT_DISABLE=yes
+WEB_ROOT=/var/www/vhosts/sandbox.firetrain.ca
+BACKUP_PATH=/home/firetrain/IOMADBACKUP/sandbox.firetrain.ca/BACKUPS
+BACKUP_DATE=$(date +%Y%m%d_%H%M%S)
+FILE_OWNER=$(logname)
+cd $WEB_ROOT/iomad
+CURRENT_COMMIT=$(git log -1 --oneline)
+cd $CURRENT_DIR
+FINALPATH=$BACKUP_PATH/$BACKUP_DATE-${CURRENT_COMMIT:0:11}
+####################################################################################################
+
+####################################################################################################
+SCP_USER=root
+SCP_HOST=smoothbore.sgvfr.com
+SCP_TARGET=/BACKUP/REMOTE/mya.firetrain.ca$WEB_ROOT/IOMAD/last-backup
+
+####################################################################################################
+read -p "Upgrade after backup? (yes/no): [$DEFAULT_DO_UPGRADE] " DO_UPGRADE
+DO_UPGRADE=${DO_UPGRADE:-$DEFAULT_DO_UPGRADE}
+read -p "SCP to offsite location? (yes/no): [$DEFAULT_DO_SCP] " DO_SCP
+DO_SCP=${DO_SCP:-$DEFAULT_DO_SCP}
+echo
+echo "--------------------------------------------------"
+echo "---- Delay in minutes before script execution"
+echo "---- Press ENTER for default $DEFAULT_DELAY minutes"
+echo "---- Enter 0 for immediate execution"
+echo "--------------------------------------------------"
+read -p "Default delay timeer is set.       Change? [$DEFAULT_DELAY] " DELAY_TIMER
+DELAY_TIMER=${DELAY_TIMER:-$DEFAULT_DELAY}
+
+read -p "Re-enable site after operation?    Change? [$DEFAULT_MAINT_DISABLE] " MAINT_DISABLE
+MAINT_DISABLE=${MAINT_DISABLE:-$DEFAULT_MAINT_DISABLE}
+
+read -p "Default webserver user is set.     Change? [$DEFAULT_WWW_OWNER] " WWW_OWNER
+WWW_OWNER=${WWW_OWNER:-$DEFAULT_WWW_OWNER}
+
+read -p "Default database name is set.      Change? [$DEFAULT_DBNAME] " DATABASE_NAME
+DATABASE_NAME=${DATABASE_NAME:-$DEFAULT_DBNAME}
+
+read -p "Default database username is set.  Change? [$DEFAULT_DBUSER] " DATABASE_USER
+DATABASE_USER=${DATABASE_USER:-$DEFAULT_DBUSER}
+
+        if [ -z "$DEFAULT_DBPASS" ]; then
+                DBPASS_SET="not set"
+        else
+                DBPASS_SET="set"
+        fi
+read -s -p "Mysql password $DBPASS_SET. (Accept or Change) " DATABASE_PASS
+DATABASE_PASS=${DATABASE_PASS:-$DEFAULT_DBPASS}
+clear
+echo --
+echo --  Upgrade will be done after backup operation completes: [$DO_UPGRADE
+echo --  Backup files will be owned by the current user [$FILE_OWNER]
+echo --  Backup files will be located in $FINALPATH
+echo --  Backup will begin $DELAY_TIMER minutes after pressing ENTER.
+echo --
+echo DELAY_TIMER:     $DELAY_TIMER
+echo MAINT_DISABLE:   $MAINT_DISABLE
+echo WWW_OWNER:       $WWW_OWNER
+echo WEB_ROOT:        $WEB_ROOT
+echo DATABASE_NAME:   $DATABASE_NAME
+echo DATABASE_USER:   $DATABASE_USER
+echo DATABASE_PASS:   $DATABASE_PASS
+echo BACKUP_PATH:     $BACKUP_PATH
+echo FINALPATH:       $FINALPATH
+echo --  use CTRL+C to abort and exit the script
+echo -----------------------------------------------------------------
+read -p ""
+####################################################################################################
+function countdown() {
+    start="$(( $(date '+%s') + $1 * 60))"
+    while [ $start -ge $(date +%s) ]; do
+        time="$(( $start - $(date +%s) ))"
+        printf '%s\r' "$(date -u -d "@$time" +%H:%M:%S)"
+        sleep 0.1
+    done
+}
+function start_upgrade () {
+	if [ $DELAY_TIMER -eq 0 ]; then
+	enable="enable"
+	else
+	enable="enablelater=$DELAY_TIMER"
+	fi
+	echo - Setting offline warning for all users
+	sudo -u $WWW_OWNER /usr/bin/php $WEB_ROOT/iomad/admin/cli/maintenance.php --$enable
+	countdown $DELAY_TIMER
+	echo -  Setting offline page for all users
+	cp $WEB_ROOT/moodledata/climaintenance.html.off $WEB_ROOT/moodledata/climaintenance.html
+	mkdir -p $FINALPATH
+	echo - BEGINNING BACKUP OF PRODUCTION WEBSITE
+	echo - into $FINALPATH
+	echo - Archiving webroot and data directories
+	cd $WEB_ROOT
+	tar cf - ./iomad -P | pv -s $(du -sb ./iomad | awk '{print $1}') | gzip > $FINALPATH/iomad.tar.gz
+	tar cf - ./moodledata -P | pv -s $(du -sb ./moodledata | awk '{print $1}') | gzip > $FINALPATH/moodledata.tar.gz
+	echo - dumping mysql -
+	mysqldump -u$DATABASE_USER -p$DATABASE_PASS -C -Q -e --create-options $DATABASE_NAME > $FINALPATH/$DEFAULT_DBNAME.sql
+	if [ $DO_UPGRADE == "yes" ]; then
+	cd $WEB_ROOT/iomad
+	echo - begining git pull -
+	sudo -u $WWW_OWNER git pull
+	chown -R $WWW_OWNER:$WWW_OWNER $WEB_ROOT/iomad
+	fi
+	echo - Disable maintenance mode and restore access
+	if [ $MAINT_DISABLE == "yes" ]; then
+	sudo -u $WWW_OWNER /usr/bin/php $WEB_ROOT/iomad/admin/cli/maintenance.php --disable
+	fi
+	echo - Changing ownership of backup files -
+	chown -R $FILE_OWNER:$FILE_OWNER $FINALPATH
+	if [ $DO_SCP == "yes" ]; then
+	echo - Starting SCP to send latest backup to a remote server
+	scp $FINALPATH/* $SCP_USER@$SCP_HOST:$SCP_TARGET/ &
+	echo ---------------------------------------------------------------------------------
+	echo -                          BACKUP COMPLETE                                      -
+	echo -   using SCP to send the latest backup to a remote server in the background    -
+	echo - check to see if you need to move certificate templates to the disabled folder -
+	echo ---------------------------------------------------------------------------------
+	fi
+	ls -al $WEB_ROOT/iomad/mod/iomadcertificate/type/
+}
+start_upgrade $DELAY_TIMER
+

@@ -1,0 +1,69 @@
+#!/bin/bash
+
+webroot=/var/www/vhosts
+iomad_config="iomad/config.php"
+#############################################################################
+mysql=$(which mysql)
+awk=$(which awk)
+grep=$(which grep)
+apache_user=$(source /etc/apache2/envvars && echo "$APACHE_RUN_USER")
+
+if [[ "$EUID" = 0 ]]; then
+    echo "(1) already root"
+else
+    sudo -k # make sure to ask for password on next sudo
+    if sudo true; then
+        echo "correct password"
+    else
+        echo "sudo password failed"
+        exit 1
+    fi
+fi
+##
+clear
+printf "Choose an installation to clear:\n"
+select hostpath in $webroot/*/; do test -n "$hostpath" && break; echo ">>> Invalid Selection"; done
+hostpath=${hostpath%/}
+config_php=$hostpath/$iomad_config
+read -p "branch to install (IOMAD_xxx_STABLE) Numbers ONLY:  " branch
+branch="IOMAD_"$branch"_STABLE"
+############################################################
+dbname=$($grep dbname $config_php | cut -d\' -f 2);
+dbuser=$($grep dbuser $config_php | cut -d\' -f 2);
+dbpass=$($grep dbpass $config_php | cut -d\' -f 2);
+wwwroot=$($grep wwwroot $config_php | cut -d\' -f 2);
+############################################################
+echo --
+echo --  The existing host at $hostpath will be DELETED
+echo --  All data will be removed
+echo --  The database will be dropped and recreated
+echo --
+echo --  $iomad_config will be restored using the following data
+echo --  Database name : $dbname
+echo --  Database user : $dbuser
+echo --  Database pass : $dbpass
+echo --  Install Branch: $branch
+echo --
+echo --  use CTRL+C to abort and exit the script
+read -p "[enter]"
+############################################################
+function clean() {
+sudo -u $apache_user cp $config_php $hostpath
+ls -al $hostpath
+cd $hostpath
+pwd
+sudo -u www-data rm -rf $hostpath/iomad
+sudo -u www-data rm -rf $hostpath/moodledata
+sudo -u www-data mkdir $hostpath/moodledata
+mysql -u$dbuser -p$dbpass -e "DROP DATABASE IF EXISTS $dbname"
+mysql -u$dbuser -p$dbpass -e "CREATE DATABASE IF NOT EXISTS $dbname"
+sudo -u $apache_user git clone https://github.com/iomad/iomad.git && cd iomad
+sudo -u $apache_user git checkout -b $branch origin/$branch
+sudo -u $apache_user cp $hostpath/config.php $config_php
+ls -al $hostpath
+clear
+echo --
+echo --  COMPLETE - visit $wwwroot to finalize the installation
+echo --
+}
+clean

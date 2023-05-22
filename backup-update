@@ -236,12 +236,12 @@ cd $script_path
     echo database_dump=$IOMAD_dbname.sql | sudo -u $www_user tee -a ${CFG[www_rootdir]}/$host_dir/PARAMS > /dev/null
     echo
 	cd $VHOST_ROOTPATH
-	echo "- BEGINNING BACKUP OF PRODUCTION WEBSITE -"
+	echo "- BEGINNING BACKUP OF PRODUCTION WEBSITE"
 	echo "- Creating ${B}${CFG[host_htmlroot]}.tar.gz${N}"
-	tar cf - ./${CFG[host_htmlroot]} -P | pv -s $(du -sb ./${CFG[host_htmlroot]} | awk '{print $1}') | gzip > $script_path/$ARCHIVE_PATH/${CFG[host_htmlroot]}.tar.gz
+	sudo -u $www_user tar cf - ./${CFG[host_htmlroot]} -P | pv -s $(du -sb ./${CFG[host_htmlroot]} | awk '{print $1}') | gzip > $script_path/$ARCHIVE_PATH/${CFG[host_htmlroot]}.tar.gz
     echo
 	echo "- Creating ${B}${CFG[host_dataroot]}.tar.gz${N}"
-	tar cf - ./${CFG[host_dataroot]} -P | pv -s $(du -sb ./${CFG[host_dataroot]} | awk '{print $1}') | gzip > $script_path/$ARCHIVE_PATH/${CFG[host_dataroot]}.tar.gz
+	sudo -u $www_user tar cf - ./${CFG[host_dataroot]} -P | pv -s $(du -sb ./${CFG[host_dataroot]} | awk '{print $1}') | gzip > $script_path/$ARCHIVE_PATH/${CFG[host_dataroot]}.tar.gz
     echo
     echo "- DUMPING DATABASE INTO: ${B}$IOMAD_dbname.sql${N} -"
 	mysqldump -u$IOMAD_dbuser -p$IOMAD_dbpass -C -Q -e --create-options $IOMAD_dbname > "$script_path/$ARCHIVE_PATH/$IOMAD_dbname.sql"
@@ -252,12 +252,12 @@ cd $script_path
 	fi
 ####################################################################################################
     printf %"$COLUMNS"s | tr " " "-"
-    echo - Changing ownership of backup files
+    echo "- Changing ownership of backup files"
 	sudo chown -R $CURRENT_USER:$CURRENT_USER $script_path/$ARCHIVE_PATH
 	if [ ${CFG[rsync_enabled]} == "yes" ]; then
-	echo - Starting rsync and sending latest backup to remote server
-	sudo -u ${CFG[rsync_localuser]} rsync -azhR $ARCHIVE_PATH/./* ${CFG[rsync_remoteuser]}@${CFG[rsync_remotehost]}:${CFG[rsync_remotepath]}/$host_dir&
-	echo "- Sending archive to remove server using rsync -"
+	echo "- Starting rsync and sending latest backup to remote server"
+	sudo -u ${CFG[rsync_localuser]} rsync -azhR $script_path/$ARCHIVE_PATH/./* ${CFG[rsync_remoteuser]}@${CFG[rsync_remotehost]}:${CFG[rsync_remotepath]}/$host_dir &
+	echo "- Sending archive to remove server using rsync"
 	fi
 	if [ ${CFG[enable_host]} == "yes" ]; then
         echo - Disable maintenance mode and restore access
