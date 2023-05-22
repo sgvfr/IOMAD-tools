@@ -198,7 +198,6 @@ printf %"$COLUMNS"s | tr " " "-"
 echo "- ${B}RSYNC options${N}"
 printf %"$COLUMNS"s | tr " " "-"
 echo "-- Use RSYNC?             :   ${CFG[rsync_enabled]}"
-echo "-- RSYNC username         :   ${CFG[rsync_localuser]}"
 echo "-- RSYNC Remote User      :   ${CFG[rsync_remoteuser]}"
 echo "-- RSYNC Remote Host      :   ${CFG[rsync_remotehost]}"
 echo "-- RSYNC Remote Path      :   ${CFG[rsync_remotepath]}"
@@ -255,8 +254,9 @@ cd $script_path
     echo "- Changing ownership of backup files"
 	sudo chown -R $CURRENT_USER:$CURRENT_USER $script_path/$ARCHIVE_PATH
 	if [ ${CFG[rsync_enabled]} == "yes" ]; then
+    cd $script_path/$ARCHIVE_PATH/
 	echo "- Starting rsync and sending latest backup to remote server"
-	rsync -azhR $script_path/$ARCHIVE_PATH/./* ${CFG[rsync_remoteuser]}@${CFG[rsync_remotehost]}:${CFG[rsync_remotepath]}/$host_dir &
+	rsync -azhR ./* ${CFG[rsync_remoteuser]}@${CFG[rsync_remotehost]}:${CFG[rsync_remotepath]}/$host_dir &
 	echo "- Sending archive to remove server using rsync"
 	fi
 	if [ ${CFG[enable_host]} == "yes" ]; then

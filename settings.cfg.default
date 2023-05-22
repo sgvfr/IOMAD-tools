@@ -60,9 +60,8 @@ archive_root=IOMAD_BACKUPS
 auto_update=no 
 
 # Additional offsite SCP host for backups.
-# Be sure to copy ssh-id to the remote host to bypass password prompts for the usernames
+# Be sure to copy your ssh-id to the remote host to bypass password prompts for the usernames
 # rsync_enabled=              [yes/no]
-# rsync_localuser=            local username to run as (sudo -u $rsync_localuser)
 # rsync_remoteuser=           remote username
 # rsync_remotehost=           domain name or IP address of remote host
 # rsync_remotepath=           Don't use a leading / unless you have access, or a jailed/chrooted remote account
@@ -70,7 +69,6 @@ auto_update=no
 #                             example:  /home/$rsync_remoteuser/$rsync_remotepath
 #                             Make sure this folder exists.  
 rsync_enabled=no
-rsync_localuser=localusername
 rsync_remoteuser=remoteusername
 rsync_remotehost=host.domain.com
 rsync_remotepath=BACKUP/REMOTE/
