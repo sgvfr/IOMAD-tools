@@ -103,10 +103,10 @@ if [ ! -d "$VHOST_HTMLPATH" ]; then
 fi
 
 if [ -f $IOMAD_PHP ]; then
-    IOMAD_dbname=$($grep dbname $IOMAD_PHP | cut -d\' -f 2);
-    IOMAD_dbuser=$($grep dbuser $IOMAD_PHP | cut -d\' -f 2);
-    IOMAD_dbpass=$($grep dbpass $IOMAD_PHP | cut -d\' -f 2);
-    IOMAD_dataroot=$($grep dataroot $IOMAD_PHP | cut -d\' -f 2);
+    IOMAD_dbname=$($grep -m1 dbname $IOMAD_PHP | cut -d\' -f 2);
+    IOMAD_dbuser=$($grep -m1 dbuser $IOMAD_PHP | cut -d\' -f 2);
+    IOMAD_dbpass=$($grep -m1 dbpass $IOMAD_PHP | cut -d\' -f 2);
+    IOMAD_dataroot=$($grep -m1 dataroot $IOMAD_PHP | cut -d\' -f 2);
 else
     echo "IOMAD Configuration file not found"
     echo "Check paths in CFG.cfg"
