@@ -256,7 +256,7 @@ cd $script_path
 	sudo chown -R $CURRENT_USER:$CURRENT_USER $script_path/$ARCHIVE_PATH
 	if [ ${CFG[rsync_enabled]} == "yes" ]; then
 	echo "- Starting rsync and sending latest backup to remote server"
-	sudo -u ${CFG[rsync_localuser]} rsync -azhR $script_path/$ARCHIVE_PATH/./* ${CFG[rsync_remoteuser]}@${CFG[rsync_remotehost]}:${CFG[rsync_remotepath]}/$host_dir &
+	sudo rsync -azhR $script_path/$ARCHIVE_PATH/./* ${CFG[rsync_remoteuser]}@${CFG[rsync_remotehost]}:${CFG[rsync_remotepath]}/$host_dir &
 	echo "- Sending archive to remove server using rsync"
 	fi
 	if [ ${CFG[enable_host]} == "yes" ]; then
